@@ -1,10 +1,10 @@
-name: Central PR Scanner (CodeQL & Sonar)
+name: Central PR Scanner (CodeQL & Sonar & LLM Description)
 
 on:
   workflow_dispatch:
     inputs:
       projectUrl:
-        description: 'Target Repository URL (e.g., https://github.com/pjalbrz16/blade-runner-server.git)'
+        description: 'Target Repository URL (e.g., https://github.com/blade-runner-unamur/blade-runner-server.git)'
         required: true
         type: string
       prId:
@@ -101,11 +101,11 @@ jobs:
           api_key = os.getenv('GEMINI_API_KEY')
           if not api_key:
               print('Skipping summary: GEMINI_API_KEY secret not found.')
-              with open('../pr_summary.txt', 'w') as out: out.write('No summary generated.')
+              with open('pr_summary.txt', 'w') as out: out.write('No summary generated.')
               exit(0)
           
           try:
-              with open('../pr_diff.txt', 'r', errors='ignore') as f:
+              with open('pr_diff.txt', 'r', errors='ignore') as f:
                   diff = f.read()
           
               # Prompt guiding the LLM on how to summarize your specific Java/CodeQL context
@@ -127,13 +127,13 @@ jobs:
                   res = json.loads(response.read().decode('utf-8'))
                   summary = res['candidates'][0]['content']['parts'][0]['text']
           
-                  with open('../pr_summary.txt', 'w') as out:
+                  with open('pr_summary.txt', 'w') as out:
                       out.write(summary)
                   print('Summary successfully generated and saved to pr_summary.txt!')
           
           except Exception as e:
               print(f'Error calling Gemini API: {e}')
-              with open('../pr_summary.txt', 'w') as out:
+              with open('pr_summary.txt', 'w') as out:
                   out.write(f'Failed to generate summary due to an error: {e}')
           "  
 
