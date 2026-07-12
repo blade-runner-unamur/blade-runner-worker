@@ -117,18 +117,28 @@ jobs:
                   f'Git Diff:\n{diff}'
               )
           
-              # Using gemini-1.5-flash for maximum speed and massive context window
-              url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}'
-              headers = {'Content-Type': 'application/json'}
-              payload = json.dumps({'contents': [{'parts': [{'text': prompt}]}]}).encode('utf-8')
+              url = 'https://generativelanguage.googleapis.com/v1beta/interactions'
+              headers = {
+                  'Content-Type': 'application/json',
+                  'x-goog-api-key': api_key
+              }
+              payload = json.dumps({
+                  'model': 'gemini-3.5-flash',
+                  'input': prompt
+              }).encode('utf-8')          
           
               req = urllib.request.Request(url, data=payload, headers=headers, method='POST')
               with urllib.request.urlopen(req) as response:
                   res = json.loads(response.read().decode('utf-8'))
-                  summary = res['candidates'][0]['content']['parts'][0]['text']
-          
+                  steps = res.get('steps', [])
+                  summary = ''
+                  for step in steps:
+                      if step.get('type') == 'model_output':
+                          summary = step['content'][0]['text']
+                  
                   with open('pr_summary.txt', 'w') as out:
-                      out.write(summary)
+                      out.write(summary if summary else 'Summary empty.')
+                  
                   print('Summary successfully generated and saved to pr_summary.txt!')
           
           except Exception as e:
