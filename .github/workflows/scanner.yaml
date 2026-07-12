@@ -73,8 +73,8 @@ jobs:
         with:
           projectBaseDir: ./target-repo
           args: >
-            -Dsonar.projectKey=pjalbrz16_github-worker-action
-            -Dsonar.organization=pjalbrz16
+            -Dsonar.projectKey=blade-runner-unamur
+            -Dsonar.organization=blade-runner-unamur
             -Dsonar.java.binaries=.
 
       - name: Perform CodeQL Analysis
