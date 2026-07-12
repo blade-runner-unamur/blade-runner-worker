@@ -91,6 +91,52 @@ jobs:
           CODEQL_CLI: "${{ steps.init.outputs.codeql-path }}"
         run : .github/scripts/generate_call_graph.sh
 
+      - name: Generate Code Summary via Gemini Free Tier
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python3 -c "
+          import os, json, urllib.request
+          
+          api_key = os.getenv('GEMINI_API_KEY')
+          if not api_key:
+              print('Skipping summary: GEMINI_API_KEY secret not found.')
+              with open('../pr_summary.txt', 'w') as out: out.write('No summary generated.')
+              exit(0)
+          
+          try:
+              with open('../pr_diff.txt', 'r', errors='ignore') as f:
+                  diff = f.read()
+          
+              # Prompt guiding the LLM on how to summarize your specific Java/CodeQL context
+              prompt = (
+                  'You are an expert AI code reviewer. Below is a git diff of a pull request. '
+                  'Provide a clear, concise technical summary of the code changes. '
+                  'Focus on structural modifications, architectural impact, and any potential risks. '
+                  'Keep it professional and action-oriented.\n\n'
+                  f'Git Diff:\n{diff}'
+              )
+          
+              # Using gemini-1.5-flash for maximum speed and massive context window
+              url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}'
+              headers = {'Content-Type': 'application/json'}
+              payload = json.dumps({'contents': [{'parts': [{'text': prompt}]}]}).encode('utf-8')
+          
+              req = urllib.request.Request(url, data=payload, headers=headers, method='POST')
+              with urllib.request.urlopen(req) as response:
+                  res = json.loads(response.read().decode('utf-8'))
+                  summary = res['candidates'][0]['content']['parts'][0]['text']
+          
+                  with open('../pr_summary.txt', 'w') as out:
+                      out.write(summary)
+                  print('Summary successfully generated and saved to pr_summary.txt!')
+          
+          except Exception as e:
+              print(f'Error calling Gemini API: {e}')
+              with open('../pr_summary.txt', 'w') as out:
+                  out.write(f'Failed to generate summary due to an error: {e}')
+          "  
+
 
       - name: Webhook to Java Backend
         run: |          
@@ -101,4 +147,5 @@ jobs:
                -F "sarifFile=@codeql-results/java.sarif" \
                -F "impactedFiles=@impacted_files.csv" \
                -F "callGraphCsv=@call_graph.csv" \
+               -F "summary=@../pr_summary.txt"
 #               -F "fullCallGraph=@full_call_graph.csv"
