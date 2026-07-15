@@ -188,26 +188,45 @@ jobs:
           path: all-results
 
       - name: Webhook to Java Backend
+        env:
+          PRE_ANALYSIS_STATUS: ${{ needs.pre-analysis.result }}
+          DEEP_ANALYSIS_STATUS: ${{ needs.deep-analysis.result }}
         run: |
           IMPACTED_FILES=$(find all-results -name "impacted_files.csv" | head -n 1)
           SUMMARY_FILE=$(find all-results -name "pr_summary.txt" | head -n 1)
           SARIF_FILE=$(find all-results -name "java.sarif" | head -n 1)
           CALL_GRAPH_FILE=$(find all-results -name "call_graph.csv" | head -n 1)
           
-          echo "Files found:"
-          echo "Impacted Files: $IMPACTED_FILES"
-          echo "Summary File: $SUMMARY_FILE"
-          echo "SARIF File: $SARIF_FILE"
-          echo "Call Graph File: $CALL_GRAPH_FILE"
+          echo "Status: Pre-analysis=$PRE_ANALYSIS_STATUS, Deep-analysis=$DEEP_ANALYSIS_STATUS"
 
-          ARGS=""
-          [ -f "$IMPACTED_FILES" ] && ARGS="$ARGS -F impactedFiles=@$IMPACTED_FILES"
-          [ -f "$SUMMARY_FILE" ] && ARGS="$ARGS -F summary=@$SUMMARY_FILE"
-          [ -f "$SARIF_FILE" ] && ARGS="$ARGS -F sarifFile=@$SARIF_FILE"
-          [ -f "$CALL_GRAPH_FILE" ] && ARGS="$ARGS -F callGraphCsv=@$CALL_GRAPH_FILE"
+          # Create placeholder files if missing to preserve API contract
+          if [ -z "$IMPACTED_FILES" ] || [ ! -f "$IMPACTED_FILES" ]; then
+            echo "change_type,file_path" > impacted_files.csv
+            echo "ERROR,Pre-analysis job failed or skipped (Status: $PRE_ANALYSIS_STATUS)" >> impacted_files.csv
+            IMPACTED_FILES="impacted_files.csv"
+          fi
+          
+          if [ -z "$SUMMARY_FILE" ] || [ ! -f "$SUMMARY_FILE" ]; then
+            echo "Summary not available because pre-analysis job failed or skipped (Status: $PRE_ANALYSIS_STATUS)." > pr_summary.txt
+            SUMMARY_FILE="pr_summary.txt"
+          fi
+          
+          if [ -z "$SARIF_FILE" ] || [ ! -f "$SARIF_FILE" ]; then
+            echo "SARIF report not available because deep-analysis job failed or skipped (Status: $DEEP_ANALYSIS_STATUS)." > java.sarif
+            SARIF_FILE="java.sarif"
+          fi
+          
+          if [ -z "$CALL_GRAPH_FILE" ] || [ ! -f "$CALL_GRAPH_FILE" ]; then
+            echo "Caller,Callee" > call_graph.csv
+            echo "ERROR,Deep-analysis job failed or skipped (Status: $DEEP_ANALYSIS_STATUS)" >> call_graph.csv
+            CALL_GRAPH_FILE="call_graph.csv"
+          fi
 
           curl -v -X POST "${{ inputs.backendUrl }}/metrics" \
                -H "Authorization: Bearer ${{ secrets.BACKEND_TOKEN }}" \
                -F "prId=${{ inputs.prId }}" \
                -F "projectUrl=${{ inputs.projectUrl }}" \
-               $ARGS
+               -F "impactedFiles=@$IMPACTED_FILES" \
+               -F "summary=@$SUMMARY_FILE" \
+               -F "sarifFile=@$SARIF_FILE" \
+               -F "callGraphCsv=@$CALL_GRAPH_FILE"
