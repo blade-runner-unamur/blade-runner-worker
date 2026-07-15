@@ -73,7 +73,7 @@ jobs:
                   'x-goog-api-key': api_key
               }
               payload = json.dumps({
-                  'model': 'gemini-2.5-flash-lite',
+                  'model': 'gemini-3.5-flash',
                   'input': prompt
               }).encode('utf-8')          
           
