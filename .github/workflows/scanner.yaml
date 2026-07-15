@@ -212,7 +212,33 @@ jobs:
           fi
           
           if [ -z "$SARIF_FILE" ] || [ ! -f "$SARIF_FILE" ]; then
-            echo "SARIF report not available because deep-analysis job failed or skipped (Status: $DEEP_ANALYSIS_STATUS)." > java.sarif
+            cat <<EOF > java.sarif
+          {
+            "version": "2.1.0",
+            "runs": [
+              {
+                "tool": {
+                  "driver": { "name": "ErrorReporter" }
+                },
+                "results": [
+                  {
+                    "ruleId": "DEEP_ANALYSIS_FAILED",
+                    "message": {
+                      "text": "SARIF report not available because deep-analysis job failed or skipped (Status: $DEEP_ANALYSIS_STATUS)."
+                    },
+                    "locations": [
+                      {
+                        "physicalLocation": {
+                          "artifactLocation": { "uri": "N/A" }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
             SARIF_FILE="java.sarif"
           fi
           
