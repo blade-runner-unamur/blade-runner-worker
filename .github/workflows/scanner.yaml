@@ -17,7 +17,8 @@ on:
         type: string
 
 jobs:
-  analyze:
+  pre-analysis:
+    name: Metadata & Summary
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Worker Repo
@@ -29,7 +30,6 @@ jobs:
           cd target-repo
           
           # Fetch the specific PR branch and the default branch to find the diff
-          
           DEFAULT_BRANCH=$(git branch --show-current)
           git fetch origin pull/${{ inputs.prId }}/head:pr-branch
           git checkout pr-branch
@@ -40,56 +40,6 @@ jobs:
           git diff -U0 origin/$DEFAULT_BRANCH...pr-branch > ../pr_diff.txt
           echo "Impacted files CSV generated:"
           cat ../impacted_files.csv
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v3
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-          cache: 'maven' # Speeds up your build by caching dependencies!
-
-      - name: Initialize CodeQL
-        id: init
-        uses: github/codeql-action/init@v3
-        with:
-          languages: java
-          source-root: ./target-repo
-
-#      - name: Autobuild Project
-#        uses: github/codeql-action/autobuild@v3
-#        env:
-#          # Tell autobuild where the code is
-#          GITHUB_WORKSPACE: ${{ github.workspace }}/target-repo
-
-      - name: Build Project
-        working-directory: ./target-repo
-        run: mvn clean install -DskipTests
-
-      - name: Run SonarCloud Scan
-        uses: SonarSource/sonarcloud-github-action@master
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        with:
-          projectBaseDir: ./target-repo
-          args: >
-            -Dsonar.projectKey=blade-runner-unamur
-            -Dsonar.organization=blade-runner-unamur
-            -Dsonar.java.binaries=.
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-        with:
-          category: "/language:java"
-          upload: false
-          upload-database: false
-          output: codeql-results
-
-      - name: Generate Call Graph CSV (Custom Query)
-        env:
-          CODEQL_DB_PATH: "${{ runner.temp }}/codeql_databases/java"
-          CODEQL_CLI: "${{ steps.init.outputs.codeql-path }}"
-        run : .github/scripts/generate_call_graph.sh
 
       - name: Generate Code Summary via Gemini Free Tier
         env:
@@ -145,17 +95,164 @@ jobs:
               print(f'Error calling Gemini API: {e}')
               with open('pr_summary.txt', 'w') as out:
                   out.write(f'Failed to generate summary due to an error: {e}')
-          "  
+          "
 
+      - name: Upload Metadata Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: metadata
+          path: |
+            impacted_files.csv
+            pr_diff.txt
+            pr_summary.txt
+
+  deep-analysis:
+    name: Build & Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Worker Repo
+        uses: actions/checkout@v4
+
+      - name: Checkout Target PR (Deep Analysis)
+        run: |
+          git clone ${{ inputs.projectUrl }} target-repo
+          cd target-repo
+          DEFAULT_BRANCH=$(git branch --show-current)
+          git fetch origin pull/${{ inputs.prId }}/head:pr-branch
+          git checkout pr-branch
+          git diff -U0 origin/$DEFAULT_BRANCH...pr-branch > ../pr_diff.txt
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven' # Speeds up your build by caching dependencies!
+
+      - name: Initialize CodeQL
+        id: init
+        uses: github/codeql-action/init@v3
+        with:
+          languages: java
+          source-root: ./target-repo
+
+      - name: Build Project
+        working-directory: ./target-repo
+        run: mvn clean install -DskipTests
+
+      - name: Run SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          projectBaseDir: ./target-repo
+          args: >
+            -Dsonar.projectKey=blade-runner-unamur
+            -Dsonar.organization=blade-runner-unamur
+            -Dsonar.java.binaries=.
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:java"
+          upload: false
+          upload-database: false
+          output: codeql-results
+
+      - name: Generate Call Graph CSV (Custom Query)
+        env:
+          CODEQL_DB_PATH: "${{ runner.temp }}/codeql_databases/java"
+          CODEQL_CLI: "${{ steps.init.outputs.codeql-path }}"
+        run : .github/scripts/generate_call_graph.sh
+
+      - name: Upload Analysis Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analysis-results
+          path: |
+            codeql-results/java.sarif
+            call_graph.csv
+          if-no-files-found: ignore
+
+  reporting:
+    name: Webhook Notification
+    needs: [pre-analysis, deep-analysis]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-results
 
       - name: Webhook to Java Backend
-        run: |          
+        env:
+          PRE_ANALYSIS_STATUS: ${{ needs.pre-analysis.result }}
+          DEEP_ANALYSIS_STATUS: ${{ needs.deep-analysis.result }}
+        run: |
+          IMPACTED_FILES=$(find all-results -name "impacted_files.csv" | head -n 1)
+          SUMMARY_FILE=$(find all-results -name "pr_summary.txt" | head -n 1)
+          SARIF_FILE=$(find all-results -name "java.sarif" | head -n 1)
+          CALL_GRAPH_FILE=$(find all-results -name "call_graph.csv" | head -n 1)
+          
+          echo "Status: Pre-analysis=$PRE_ANALYSIS_STATUS, Deep-analysis=$DEEP_ANALYSIS_STATUS"
+
+          # Create placeholder files if missing to preserve API contract
+          if [ -z "$IMPACTED_FILES" ] || [ ! -f "$IMPACTED_FILES" ]; then
+            echo "change_type,file_path" > impacted_files.csv
+            echo "ERROR,Pre-analysis job failed or skipped (Status: $PRE_ANALYSIS_STATUS)" >> impacted_files.csv
+            IMPACTED_FILES="impacted_files.csv"
+          fi
+          
+          if [ -z "$SUMMARY_FILE" ] || [ ! -f "$SUMMARY_FILE" ]; then
+            echo "Summary not available because pre-analysis job failed or skipped (Status: $PRE_ANALYSIS_STATUS)." > pr_summary.txt
+            SUMMARY_FILE="pr_summary.txt"
+          fi
+          
+          if [ -z "$SARIF_FILE" ] || [ ! -f "$SARIF_FILE" ]; then
+            cat <<EOF > java.sarif
+          {
+            "version": "2.1.0",
+            "runs": [
+              {
+                "tool": {
+                  "driver": { "name": "ErrorReporter" }
+                },
+                "results": [
+                  {
+                    "ruleId": "DEEP_ANALYSIS_FAILED",
+                    "message": {
+                      "text": "SARIF report not available because deep-analysis job failed or skipped (Status: $DEEP_ANALYSIS_STATUS)."
+                    },
+                    "locations": [
+                      {
+                        "physicalLocation": {
+                          "artifactLocation": { "uri": "N/A" }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+            SARIF_FILE="java.sarif"
+          fi
+          
+          if [ -z "$CALL_GRAPH_FILE" ] || [ ! -f "$CALL_GRAPH_FILE" ]; then
+            echo "Caller,Callee" > call_graph.csv
+            echo "ERROR,Deep-analysis job failed or skipped (Status: $DEEP_ANALYSIS_STATUS)" >> call_graph.csv
+            CALL_GRAPH_FILE="call_graph.csv"
+          fi
+
           curl -v -X POST "${{ inputs.backendUrl }}/metrics" \
                -H "Authorization: Bearer ${{ secrets.BACKEND_TOKEN }}" \
                -F "prId=${{ inputs.prId }}" \
                -F "projectUrl=${{ inputs.projectUrl }}" \
-               -F "sarifFile=@codeql-results/java.sarif" \
-               -F "impactedFiles=@impacted_files.csv" \
-               -F "callGraphCsv=@call_graph.csv" \
-               -F "summary=@pr_summary.txt"
-#               -F "fullCallGraph=@full_call_graph.csv"
+               -F "impactedFiles=@$IMPACTED_FILES" \
+               -F "summary=@$SUMMARY_FILE" \
+               -F "sarifFile=@$SARIF_FILE" \
+               -F "callGraphCsv=@$CALL_GRAPH_FILE"
